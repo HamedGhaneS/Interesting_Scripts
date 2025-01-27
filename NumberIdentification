@@ -1,0 +1,127 @@
+import torch
+import torch.nn as nn
+import torch.optim as optim
+import tkinter as tk
+import numpy as np
+from PIL import Image, ImageDraw
+from torchvision import datasets, transforms
+
+class DigitRecognizer(nn.Module):
+    def __init__(self):
+        super(DigitRecognizer, self).__init__()
+        self.hidden1 = nn.Linear(784, 128)
+        self.hidden2 = nn.Linear(128, 64)
+        self.output = nn.Linear(64, 10)
+        self.relu = nn.ReLU()
+        self.dropout = nn.Dropout(0.2)
+        self.softmax = nn.Softmax(dim=1)
+        
+    def forward(self, x):
+        x = x.view(-1, 784)
+        x = self.dropout(self.relu(self.hidden1(x)))
+        x = self.dropout(self.relu(self.hidden2(x)))
+        x = self.softmax(self.output(x))
+        return x
+
+def train_model():
+    model = DigitRecognizer()
+    criterion = nn.CrossEntropyLoss()
+    optimizer = optim.Adam(model.parameters(), lr=0.001)
+    
+    transform = transforms.Compose([
+        transforms.ToTensor(),
+        transforms.Normalize((0.1307,), (0.3081,))
+    ])
+    
+    train_dataset = datasets.MNIST('data', train=True, download=True, transform=transform)
+    train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=64, shuffle=True)
+    
+    model.train()
+    for epoch in range(5):
+        for batch_idx, (data, target) in enumerate(train_loader):
+            optimizer.zero_grad()
+            output = model(data)
+            loss = criterion(output, target)
+            loss.backward()
+            optimizer.step()
+            
+            if batch_idx % 100 == 0:
+                print(f'Epoch: {epoch}, Batch: {batch_idx}, Loss: {loss.item():.4f}')
+    
+    torch.save(model.state_dict(), 'digit_model.pth')
+    return model
+
+class DrawingApp:
+    def __init__(self, root, model):
+        self.root = root
+        self.root.title("Digit Recognition")
+        
+        self.canvas = tk.Canvas(root, width=280, height=280, bg='black')
+        self.canvas.pack(pady=20)
+        
+        self.result_text = tk.StringVar()
+        self.result_label = tk.Label(root, textvariable=self.result_text)
+        self.result_label.pack()
+        
+        self.clear_button = tk.Button(root, text="Clear", command=self.clear_canvas)
+        self.clear_button.pack()
+        
+        self.image = Image.new("L", (280, 280), "black")
+        self.draw = ImageDraw.Draw(self.image)
+        
+        self.model = model
+        self.model.eval()
+        
+        self.canvas.bind("<B1-Motion>", self.paint)
+        self.canvas.bind("<ButtonRelease-1>", self.recognize_digit)
+        
+        self.last_x = None
+        self.last_y = None
+
+    def paint(self, event):
+        x, y = event.x, event.y
+        if self.last_x and self.last_y:
+            self.canvas.create_line((self.last_x, self.last_y, x, y), 
+                                  fill='white', width=20)
+            self.draw.line([self.last_x, self.last_y, x, y], 
+                          fill='white', width=20)
+        self.last_x = x
+        self.last_y = y
+
+    def clear_canvas(self):
+        self.canvas.delete("all")
+        self.image = Image.new("L", (280, 280), "black")
+        self.draw = ImageDraw.Draw(self.image)
+        self.result_text.set("")
+        self.last_x = None
+        self.last_y = None
+
+    def recognize_digit(self, event):
+        img = self.image.resize((28, 28), Image.Resampling.LANCZOS)
+        img_array = np.array(img)
+        img_array = img_array.reshape(1, 784) / 255.0
+        
+        with torch.no_grad():
+            tensor = torch.FloatTensor(img_array)
+            outputs = self.model(tensor)
+            probabilities = outputs[0].numpy()
+            
+        result = "Predictions:\n"
+        for i, prob in enumerate(probabilities):
+            result += f"Digit {i}: {prob*100:.1f}%\n"
+        self.result_text.set(result)
+        
+        self.last_x = None
+        self.last_y = None
+
+if __name__ == "__main__":
+    try:
+        model = DigitRecognizer()
+        model.load_state_dict(torch.load('digit_model.pth'))
+    except:
+        print("Training new model...")
+        model = train_model()
+    
+    root = tk.Tk()
+    app = DrawingApp(root, model)
+    root.mainloop()
